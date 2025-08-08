@@ -7,15 +7,11 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <memory>
+#include <memory> // Required for std::unique_ptr
 #include <numeric> // For std::accumulate
 
 #include "NvInfer.h"
 #include "cuda_runtime_api.h"
-
-// Helper for using smart pointers with TensorRT objects.
-template <typename T>
-using UniquePtr = std::unique_ptr<T, void (*)(T*)>;
 
 // A simple logger class required by the TensorRT API.
 class Logger : public nvinfer1::ILogger {
@@ -58,10 +54,10 @@ int main(int argc, char** argv) {
     std::vector<char> engine_data(engine_size);
     engine_file.read(engine_data.data(), engine_size);
 
-    // 2. Create a runtime and deserialize the engine using smart pointers
-    UniquePtr<nvinfer1::IRuntime> runtime(nvinfer1::createInferRuntime(gLogger), [](nvinfer1::IRuntime* r) { r->destroy(); });
-    UniquePtr<nvinfer1::ICudaEngine> engine(runtime->deserializeCudaEngine(engine_data.data(), engine_size), [](nvinfer1::ICudaEngine* e) { e->destroy(); });
-    UniquePtr<nvinfer1::IExecutionContext> context(engine->createExecutionContext(), [](nvinfer1::IExecutionContext* c) { c->destroy(); });
+    // 2. Create a runtime and deserialize the engine using smart pointers with the default deleter
+    std::unique_ptr<nvinfer1::IRuntime> runtime(nvinfer1::createInferRuntime(gLogger));
+    std::unique_ptr<nvinfer1::ICudaEngine> engine(runtime->deserializeCudaEngine(engine_data.data(), engine_size));
+    std::unique_ptr<nvinfer1::IExecutionContext> context(engine->createExecutionContext());
 
     // 3. Allocate GPU buffers for input and output
     // The new API uses tensor names. We assume the names are "input" and "output"

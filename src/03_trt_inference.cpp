@@ -1,14 +1,10 @@
-// src/03_trt_inference.cpp
-//
-// Purpose: Loads a pre-built TensorRT engine and performs inference.
-// This simulates the actual deployment scenario where the application
-// uses the optimized engine for fast predictions.
-
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <memory> // Required for std::unique_ptr
-#include <numeric> // For std::accumulate
+#include <memory>
+#include <numeric>
+#include <string>
+#include <chrono> // For timing
 
 #include "NvInfer.h"
 #include "cuda_runtime_api.h"
@@ -16,7 +12,6 @@
 // A simple logger class required by the TensorRT API.
 class Logger : public nvinfer1::ILogger {
     void log(Severity severity, const char* msg) noexcept override {
-        // Suppress info-level messages for a cleaner output.
         if (severity <= Severity::kWARNING) {
             std::cout << msg << std::endl;
         }
@@ -34,15 +29,31 @@ class Logger : public nvinfer1::ILogger {
     } while (0)
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <path_to_engine_file>" << std::endl;
+    if (argc < 2 || argc > 3) {
+        std::cerr << "Usage: " << argv[0] << " <path_to_engine_file> [batch_size]" << std::endl;
         return -1;
     }
     const char* engine_filename = argv[1];
+    int batch_size = 1;
+    if (argc == 3) {
+        batch_size = std::stoi(argv[2]);
+    }
+
+    // Detect precision mode from filename
+    std::string filename_str(engine_filename);
+    if (filename_str.find("_fp16") != std::string::npos) {
+        std::cout << "Running inference in FP16 mode." << std::endl;
+    } else if (filename_str.find("_int8") != std::string::npos) {
+        std::cout << "Running inference in INT8 mode." << std::endl;
+    } else {
+        std::cout << "Running inference in FP32 mode." << std::endl;
+    }
+    std::cout << "Using Batch Size: " << batch_size << std::endl;
+
 
     Logger gLogger;
 
-    // 1. Read the engine file into a buffer
+    // 1. Read the engine file
     std::ifstream engine_file(engine_filename, std::ios::binary);
     if (!engine_file) {
         std::cerr << "Error opening engine file: " << engine_filename << std::endl;
@@ -54,65 +65,86 @@ int main(int argc, char** argv) {
     std::vector<char> engine_data(engine_size);
     engine_file.read(engine_data.data(), engine_size);
 
-    // 2. Create a runtime and deserialize the engine using smart pointers with the default deleter
+    // 2. Create runtime, engine, and context
     std::unique_ptr<nvinfer1::IRuntime> runtime(nvinfer1::createInferRuntime(gLogger));
     std::unique_ptr<nvinfer1::ICudaEngine> engine(runtime->deserializeCudaEngine(engine_data.data(), engine_size));
     std::unique_ptr<nvinfer1::IExecutionContext> context(engine->createExecutionContext());
 
-    // 3. Allocate GPU buffers for input and output
-    // The new API uses tensor names. We assume the names are "input" and "output"
-    // as defined in the ONNX export script.
+    // 3. Set the input dimensions for this inference execution
     const char* input_name = "input";
-    const char* output_name = "output";
+    auto input_dims = engine->getTensorShape(input_name);
+    input_dims.d[0] = batch_size; // Set the batch size from command line
+    if (!context->setInputShape(input_name, input_dims)) {
+        std::cerr << "Failed to set input shape. Ensure batch size " << batch_size 
+                  << " is within the optimization profile range." << std::endl;
+        return -1;
+    }
 
+    // 4. Allocate GPU buffers
     void* input_buffer = nullptr;
     void* output_buffer = nullptr;
+    const char* output_name = "output";
 
-    // Calculate buffer sizes using tensor shapes
-    auto input_dims = engine->getTensorShape(input_name);
-    size_t input_size = std::accumulate(input_dims.d, input_dims.d + input_dims.nbDims, 1, std::multiplies<int64_t>());
-    auto output_dims = engine->getTensorShape(output_name);
-    size_t output_size = std::accumulate(output_dims.d, output_dims.d + output_dims.nbDims, 1, std::multiplies<int64_t>());
+    auto final_input_dims = context->getTensorShape(input_name);
+    size_t input_size = std::accumulate(final_input_dims.d, final_input_dims.d + final_input_dims.nbDims, 1, std::multiplies<int64_t>());
+    auto final_output_dims = context->getTensorShape(output_name);
+    size_t output_size = std::accumulate(final_output_dims.d, final_output_dims.d + final_output_dims.nbDims, 1, std::multiplies<int64_t>());
 
     CHECK(cudaMalloc(&input_buffer, input_size * sizeof(float)));
     CHECK(cudaMalloc(&output_buffer, output_size * sizeof(float)));
 
-    // Set the buffer addresses in the execution context
     context->setTensorAddress(input_name, input_buffer);
     context->setTensorAddress(output_name, output_buffer);
 
-    // 4. Prepare dummy input data on the host (CPU)
-    std::vector<float> host_input(input_size);
-    for (size_t i = 0; i < input_size; ++i) {
-        host_input[i] = 1.0f; // Simple dummy data
-    }
-
-    // 5. Copy input data from host to device (GPU)
+    // 5. Prepare and copy input data
+    std::vector<float> host_input(input_size, 1.0f);
     CHECK(cudaMemcpy(input_buffer, host_input.data(), input_size * sizeof(float), cudaMemcpyHostToDevice));
 
-    // 6. Execute the inference using enqueueV3
-    std::cout << "Executing inference..." << std::endl;
-    if (!context->enqueueV3(0)) { // 0 is for the default CUDA stream
-        std::cerr << "Failed to enqueue inference." << std::endl;
-        return -1;
-    }
+    // --- Performance Test ---
+    int num_iterations = 100;
+    std::cout << "\n--- Running Performance Test ---" << std::endl;
+    std::cout << "Number of iterations: " << num_iterations << std::endl;
 
-    // 7. Copy output data from device to host
+    // Warm-up runs
+    for (int i = 0; i < 10; ++i) {
+        context->enqueueV3(0);
+    }
+    CHECK(cudaDeviceSynchronize()); // Wait for warm-up to finish
+
+    // Timed runs
+    auto start_time = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < num_iterations; ++i) {
+        context->enqueueV3(0);
+    }
+    CHECK(cudaDeviceSynchronize()); // Wait for all inferences to finish
+    auto end_time = std::chrono::high_resolution_clock::now();
+
+    // Calculate and print metrics
+    auto total_duration_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+    double avg_latency_ms = total_duration_ms / num_iterations;
+    double throughput_fps = (batch_size * num_iterations) / (total_duration_ms / 1000.0);
+
+    std::cout << "\n--- Performance Results ---" << std::endl;
+    std::cout << "Total time for " << num_iterations << " inferences: " << total_duration_ms << " ms" << std::endl;
+    std::cout << "Average Latency: " << avg_latency_ms << " ms" << std::endl;
+    std::cout << "Throughput: " << throughput_fps << " FPS (frames per second)" << std::endl;
+    std::cout << "---------------------------\n" << std::endl;
+
+
+    // Copy final output data back to host for a quick check
     std::vector<float> host_output(output_size);
     CHECK(cudaMemcpy(host_output.data(), output_buffer, output_size * sizeof(float), cudaMemcpyDeviceToHost));
-    std::cout << "Inference finished." << std::endl;
 
-    // 8. Print the first 10 results
-    std::cout << "Displaying first 10 output values:" << std::endl;
+    // Print first 10 results to confirm it's still working
+    std::cout << "Displaying first 10 output values from the last run:" << std::endl;
     for (int i = 0; i < 10; ++i) {
         std::cout << host_output[i] << " ";
     }
     std::cout << std::endl;
 
-    // 9. Clean up GPU buffers
+    // Clean up
     CHECK(cudaFree(input_buffer));
     CHECK(cudaFree(output_buffer));
-    // All TensorRT objects are cleaned up automatically by their smart pointers.
 
     return 0;
 }

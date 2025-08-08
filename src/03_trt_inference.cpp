@@ -13,9 +13,14 @@
 #include "NvInfer.h"
 #include "cuda_runtime_api.h"
 
+// Helper for using smart pointers with TensorRT objects.
+template <typename T>
+using UniquePtr = std::unique_ptr<T, void (*)(T*)>;
+
 // A simple logger class required by the TensorRT API.
 class Logger : public nvinfer1::ILogger {
     void log(Severity severity, const char* msg) noexcept override {
+        // Suppress info-level messages for a cleaner output.
         if (severity <= Severity::kWARNING) {
             std::cout << msg << std::endl;
         }
@@ -27,7 +32,7 @@ class Logger : public nvinfer1::ILogger {
     do { \
         auto ret = (status); \
         if (ret != 0) { \
-            std::cerr << "Cuda failure: " << ret << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+            std::cerr << "Cuda failure: " << cudaGetErrorString(ret) << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
             abort(); \
         } \
     } while (0)
@@ -53,24 +58,32 @@ int main(int argc, char** argv) {
     std::vector<char> engine_data(engine_size);
     engine_file.read(engine_data.data(), engine_size);
 
-    // 2. Create a runtime and deserialize the engine
-    nvinfer1::IRuntime* runtime = nvinfer1::createInferRuntime(gLogger);
-    nvinfer1::ICudaEngine* engine = runtime->deserializeCudaEngine(engine_data.data(), engine_size, nullptr);
-    nvinfer1::IExecutionContext* context = engine->createExecutionContext();
+    // 2. Create a runtime and deserialize the engine using smart pointers
+    UniquePtr<nvinfer1::IRuntime> runtime(nvinfer1::createInferRuntime(gLogger), [](nvinfer1::IRuntime* r) { r->destroy(); });
+    UniquePtr<nvinfer1::ICudaEngine> engine(runtime->deserializeCudaEngine(engine_data.data(), engine_size), [](nvinfer1::ICudaEngine* e) { e->destroy(); });
+    UniquePtr<nvinfer1::IExecutionContext> context(engine->createExecutionContext(), [](nvinfer1::IExecutionContext* c) { c->destroy(); });
 
     // 3. Allocate GPU buffers for input and output
-    void* buffers[engine->getNbBindings()];
-    const int input_idx = engine->getBindingIndex("input");
-    const int output_idx = engine->getBindingIndex("output");
+    // The new API uses tensor names. We assume the names are "input" and "output"
+    // as defined in the ONNX export script.
+    const char* input_name = "input";
+    const char* output_name = "output";
 
-    // Calculate buffer sizes
-    auto input_dims = engine->getBindingDimensions(input_idx);
+    void* input_buffer = nullptr;
+    void* output_buffer = nullptr;
+
+    // Calculate buffer sizes using tensor shapes
+    auto input_dims = engine->getTensorShape(input_name);
     size_t input_size = std::accumulate(input_dims.d, input_dims.d + input_dims.nbDims, 1, std::multiplies<int64_t>());
-    auto output_dims = engine->getBindingDimensions(output_idx);
+    auto output_dims = engine->getTensorShape(output_name);
     size_t output_size = std::accumulate(output_dims.d, output_dims.d + output_dims.nbDims, 1, std::multiplies<int64_t>());
 
-    CHECK(cudaMalloc(&buffers[input_idx], input_size * sizeof(float)));
-    CHECK(cudaMalloc(&buffers[output_idx], output_size * sizeof(float)));
+    CHECK(cudaMalloc(&input_buffer, input_size * sizeof(float)));
+    CHECK(cudaMalloc(&output_buffer, output_size * sizeof(float)));
+
+    // Set the buffer addresses in the execution context
+    context->setTensorAddress(input_name, input_buffer);
+    context->setTensorAddress(output_name, output_buffer);
 
     // 4. Prepare dummy input data on the host (CPU)
     std::vector<float> host_input(input_size);
@@ -79,15 +92,18 @@ int main(int argc, char** argv) {
     }
 
     // 5. Copy input data from host to device (GPU)
-    CHECK(cudaMemcpy(buffers[input_idx], host_input.data(), input_size * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(input_buffer, host_input.data(), input_size * sizeof(float), cudaMemcpyHostToDevice));
 
-    // 6. Execute the inference
+    // 6. Execute the inference using enqueueV3
     std::cout << "Executing inference..." << std::endl;
-    context->enqueueV2(buffers, 0, nullptr);
+    if (!context->enqueueV3(0)) { // 0 is for the default CUDA stream
+        std::cerr << "Failed to enqueue inference." << std::endl;
+        return -1;
+    }
 
     // 7. Copy output data from device to host
     std::vector<float> host_output(output_size);
-    CHECK(cudaMemcpy(host_output.data(), buffers[output_idx], output_size * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(host_output.data(), output_buffer, output_size * sizeof(float), cudaMemcpyDeviceToHost));
     std::cout << "Inference finished." << std::endl;
 
     // 8. Print the first 10 results
@@ -97,12 +113,10 @@ int main(int argc, char** argv) {
     }
     std::cout << std::endl;
 
-    // 9. Clean up
-    CHECK(cudaFree(buffers[input_idx]));
-    CHECK(cudaFree(buffers[output_idx]));
-    delete context;
-    delete engine;
-    delete runtime;
+    // 9. Clean up GPU buffers
+    CHECK(cudaFree(input_buffer));
+    CHECK(cudaFree(output_buffer));
+    // All TensorRT objects are cleaned up automatically by their smart pointers.
 
     return 0;
 }

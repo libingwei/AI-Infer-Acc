@@ -1,54 +1,73 @@
 #!/bin/bash
 set -e
+export DEBIAN_FRONTEND=noninteractive
 
-echo "INFO: Starting environment setup for CUDA 12.4 and a compatible TensorRT."
+echo "INFO: System driver supports CUDA 12.4. Aligning environment to this version."
 
-# Step 1: Purge any existing CUDA and TensorRT installations to ensure a clean slate.
-echo "INFO: Purging existing CUDA installations..."
-sudo apt-get -y purge "cuda-*" "libcudnn8*" "libnvidi*" "tensorrt*" &>/dev/null
-sudo apt-get -y autoremove &>/dev/null
-sudo apt-get -y clean
+# Step 1: Clean apt cache and update package lists.
+echo "INFO: Cleaning apt cache and updating package lists..."
+sudo apt-get clean
+sudo apt-get update
 
-# Step 2: Install CUDA Toolkit 12.4, which is compatible with the Colab driver.
-echo "INFO: Installing CUDA Toolkit 12.4..."
+# Step 2: Ensure the NVIDIA repository keyring is installed.
+echo "INFO: Setting up CUDA repository keyring..."
 wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
 sudo dpkg -i cuda-keyring_1.1-1_all.deb
 rm cuda-keyring_1.1-1_all.deb
 sudo apt-get update
-sudo apt-get -y install cuda-toolkit-12-4
 
-# Step 3: Dynamically find and install the correct TensorRT version for CUDA 12.4.
-echo "INFO: Searching for a compatible TensorRT version for CUDA 12.4..."
+# Step 3: Install CUDA 12.4 runtime libraries to match the driver.
+echo "INFO: Installing CUDA 12.4 runtime libraries..."
+sudo apt-get -y install \
+    cuda-libraries-12-4 \
+    cuda-libraries-dev-12-4
 
-# Search for available libnvinfer-dev packages and filter for ones built for cuda12.4
-# Then extract the version string of the first match.
-TRT_VERSION_STRING=$(apt-cache madison libnvinfer-dev | grep 'cuda12.4' | head -n 1 | awk '{print $3}')
+# Step 4: Forcefully purge any existing TensorRT installations to prevent conflicts.
+echo "INFO: Purging any potentially conflicting TensorRT packages..."
+sudo apt-get -y purge "libnvinfer*" "tensorrt*" &>/dev/null
+sudo apt-get -y autoremove &>/dev/null
+
+# Step 5: Dynamically and strictly find the correct TensorRT version for CUDA 12.4.
+echo "INFO: Searching for a compatible TensorRT version specifically for CUDA 12.4..."
+TRT_VERSION_STRING=$(apt-cache madison libnvinfer-dev | grep 'cuda12\.4' | head -n 1 | awk '{print $3}')
 
 if [ -z "$TRT_VERSION_STRING" ]; then
-    echo "ERROR: Could not find a compatible TensorRT version for CUDA 12.4."
-    echo "Please check the NVIDIA repositories or your network connection."
+    echo "ERROR: Could not find a compatible TensorRT version for CUDA 12.4 in the apt repositories."
     exit 1
 fi
 
-echo "INFO: Found compatible TensorRT version. Pinning installation to ${TRT_VERSION_STRING}"
+echo "INFO: Found compatible TensorRT version for CUDA 12.4. Pinning installation to ${TRT_VERSION_STRING}"
 
-# Install all necessary TensorRT packages, pinning them to the dynamically found version.
-# The main package to target is `libnvinfer-dev`. It will pull other dependencies.
+# Step 6: Install all necessary TensorRT packages and ALL their dependencies, explicitly pinning every single package version.
+# This is the final, most robust solution to prevent apt from choosing incompatible dependency versions.
+echo "INFO: Installing TensorRT and all its dependencies with strict version pinning..."
 sudo apt-get install -y --allow-downgrades \
     libnvinfer-dev=${TRT_VERSION_STRING} \
+    libnvinfer10=${TRT_VERSION_STRING} \
+    libnvinfer-headers-dev=${TRT_VERSION_STRING} \
+    libnvinfer-headers-plugin-dev=${TRT_VERSION_STRING} \
     libnvonnxparsers-dev=${TRT_VERSION_STRING} \
+    libnvonnxparsers10=${TRT_VERSION_STRING} \
+    libnvinfer-plugin-dev=${TRT_VERSION_STRING} \
+    libnvinfer-plugin10=${TRT_VERSION_STRING} \
+    python3-libnvinfer=${TRT_VERSION_STRING} \
     libnvinfer-samples=${TRT_VERSION_STRING} \
-    python3-libnvinfer=${TRT_VERSION_STRING}
+    libnvinfer-lean-dev=${TRT_VERSION_STRING} \
+    libnvinfer-lean10=${TRT_VERSION_STRING} \
+    libnvinfer-dispatch-dev=${TRT_VERSION_STRING} \
+    libnvinfer-dispatch10=${TRT_VERSION_STRING} \
+    libnvinfer-vc-plugin-dev=${TRT_VERSION_STRING} \
+    libnvinfer-vc-plugin10=${TRT_VERSION_STRING}
 
-echo "INFO: Successfully installed version-pinned TensorRT."
+echo "INFO: Successfully installed CUDA 12.4 libraries and version-pinned TensorRT."
 
-
-# Step 4: Verify the installation.
+# Step 7: Verify the installation.
 echo "INFO: Verifying installations..."
-echo "NVCC Version:"
+echo "NVIDIA Driver (from nvidia-smi):"
+nvidia-smi | grep "CUDA Version"
+echo "NVCC Version (may still show a different version, but runtime is now aligned):"
 nvcc --version
-
 echo "TensorRT (dpkg) Version:"
 dpkg -l | grep libnvinfer
 
-echo "INFO: Environment setup complete."
+echo "INFO: Environment setup complete. The runtime environment is now aligned with the CUDA 12.4 driver."

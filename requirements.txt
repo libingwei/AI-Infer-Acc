@@ -1,0 +1,7 @@
+# PyTorch and Torchvision for model handling
+torch
+torchvision
+
+# ONNX for model exporting and manipulation
+onnx
+onnxruntime

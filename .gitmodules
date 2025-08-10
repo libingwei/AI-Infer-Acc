@@ -1,0 +1,4 @@
+[submodule "projects/trt-yolov8-accelerator"]
+	path = projects/trt-yolov8-accelerator
+	url = git@github.com:libingwei/trt-yolov8-accelerator.git
+	branch = main

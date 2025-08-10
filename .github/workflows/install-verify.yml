@@ -1,0 +1,33 @@
+name: install-verify
+
+on:
+  # Manual trigger by default; enable push/PR when a proper runner is available
+  workflow_dispatch:
+
+jobs:
+  build-install-consume:
+    # Requires a self-hosted runner with CUDA/TensorRT/OpenCV & CMake toolchain preinstalled.
+    # Example: add labels [self-hosted, linux, trt] and update the runs-on below accordingly.
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -DTRT_UTILS_BUILD_SHARED=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Install
+        run: cmake --install build --prefix ${{ github.workspace }}/_inst
+
+      - name: Configure consumer
+        working-directory: examples/consumer
+        env:
+          CMAKE_PREFIX_PATH: ${{ github.workspace }}/_inst
+        run: cmake -S . -B build
+
+      - name: Build consumer
+        working-directory: examples/consumer/build
+        run: cmake --build . -j

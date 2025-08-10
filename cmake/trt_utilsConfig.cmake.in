@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Declare dependencies so imported targets referenced by trt_utilsTargets are available
+find_dependency(CUDAToolkit)
+find_dependency(OpenCV)
+# TensorRT package names vary across distros; try best-effort discovery
+find_dependency(TensorRT QUIET)
+
+include("${CMAKE_CURRENT_LIST_DIR}/trt_utilsTargets.cmake")
+
+# Provide a convenient alias target for consumers
+add_library(trt_utils::trt_utils ALIAS trt_utils)

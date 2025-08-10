@@ -5,3 +5,7 @@ torchvision
 # ONNX for model exporting and manipulation
 onnx
 onnxruntime
+
+# For downloading calibration data
+requests
+tqdm

@@ -2,13 +2,33 @@
 
 > 面向 AI 模型推理加速与部署岗位，按“已完成 / 待办（优先级）/ 亮眼项目”分组管理。
 
+## 🧭 仓库策略（已决策）
+- 亮眼项目采用“独立仓库”，当前仓库仅保留链接与结果汇总；暂不使用 git submodule。
+- 如需共享基建代码，优先考虑后续以 git subtree 同步，避免 submodule 的使用复杂度。
+
+## 🚀 新仓库初始化任务清单
+- [x] 新仓库创建（trt-yolov8-accelerator，路径：`projects/trt-yolov8-accelerator/`），Apache-2.0 许可证
+- [x] 目录搭建：src/include、scripts、docker（plugins/benchmarks/triton/models 后续补齐）
+- [x] 最小可运行骨架：
+  - [x] CMake 工程与 `onnx_to_trt_yolo`、`yolo_trt_infer`
+  - [x] YOLOv8 ONNX 导出脚本 `projects/trt-yolov8-accelerator/scripts/export_yolov8_onnx.py`
+  - [x] Dockerfile（`projects/trt-yolov8-accelerator/docker/Dockerfile`）
+- [x] README 首版（`projects/trt-yolov8-accelerator/README.md`）与草稿（`docs/NEW_REPO_README_draft.md`）
+- [ ] CI（可选）：构建与样例运行校验
+
 ## ✅ 已完成（可复现）
 - [x] PyTorch → ONNX 导出（ResNet18）：`scripts/generate_onnx_model.py`
-- [x] ONNX → TensorRT 引擎构建（FP32/FP16/INT8）：`src/onnx_to_trt.cpp`
-- [x] INT8 标定实现与数据准备：`src/int8_calibrator.{h,cpp}`，`scripts/download_calibration_data.py`
-- [x] C++ 推理与性能基准：`src/trt_inference.cpp`（非默认流、Pinned 内存、双流流水线）
-- [x] 一致性/精度评估工具：`src/trt_compare.cpp`（无标签一致性 + 有标签 Acc@1/Acc@5）
+- [x] ONNX → TensorRT 引擎构建（FP32/FP16/INT8）：`apps/onnx_to_trt/src/onnx_to_trt.cpp`
+- [x] INT8 标定实现与数据准备：`libs/trt_utils/include/trt_utils/int8_calibrator.h`、`libs/trt_utils/src/int8_calibrator.cpp`，`scripts/download_calibration_data.py`
+- [x] C++ 推理与性能基准：`apps/trt_inference/src/trt_inference.cpp`（非默认流、Pinned 内存、双流流水线）
+- [x] 一致性/精度评估工具：`apps/trt_compare/src/trt_compare.cpp`（无标签一致性 + 有标签 Acc@1/Acc@5）
 - [x] CMake 目标配置：`CMakeLists.txt`（onnx_to_trt / trt_inference / trt_compare / simple_trt_test）
+- [x] Kaggle/Colab 环境脚本：`scripts/setup_kaggle_env.sh`、`scripts/setup_colab_env.sh`
+- [x] 运行库就地打包与环境：构建阶段复制 TensorRT/cuDNN 到 `bin/`，生成 `bin/env.sh`
+- [x] ImageNet 验证集准备：`scripts/prepare_imagenet_val.py`（支持 devkit、子集、labels CSV、classes TSV、assets 优先）
+- [x] 离线类别映射：`assets/imagenet_class_index.json` 与导出脚本 `scripts/export_imagenet_class_index.py`
+- [x] trt_compare 增强：递归扫描、`.jpeg/.JPEG` 支持、`--class-names`、`--inspect` 可读输出
+- [x] README 更新：Kaggle T4×2（TRT 10.4）最新性能与精度对齐说明
 
 ## 🟡 待办（通用能力补齐）
 - [ ] 动态尺寸完善（中优）
@@ -27,6 +47,9 @@
 - [ ] Pybind11 封装（中优）
   - [ ] 将引擎加载与推理包装为 Python 模块，支持 numpy/tensor 输入输出
   - [ ] 简单单测（pytest）覆盖加载、推理、异常路径
+- [ ] 文档打磨（中优）
+  - [ ] `docs/NEW_REPO_README_draft.md` 补充实测截图与表格
+  - [ ] 主 README 增加一页式“常见问题/故障排查”
 
 ## 🔵 第三、四周亮眼项目：基于 TensorRT 的自动驾驶目标检测与推理加速（未做）
 - [ ] 数据与场景（高优）

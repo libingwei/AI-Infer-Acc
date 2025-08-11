@@ -38,6 +38,35 @@ bool TrtRunner::prepare(int batchSize, std::string inputName, std::string output
     return true;
 }
 
+bool TrtRunner::prepare(int batchSize, int H, int W,
+                        std::string inputName, std::string outputName) {
+    if (!engine_ || !ctx_) return false;
+    if (inputName.empty()) inputName_ = TrtHelpers::firstTensorName(*engine_, nvinfer1::TensorIOMode::kINPUT, "input");
+    else inputName_ = std::move(inputName);
+    if (outputName.empty()) outputName_ = TrtHelpers::firstTensorName(*engine_, nvinfer1::TensorIOMode::kOUTPUT, "output");
+    else outputName_ = std::move(outputName);
+
+    auto inDims = engine_->getTensorShape(inputName_.c_str());
+    inDims.d[0] = batchSize;
+    if (inDims.nbDims >= 4) {
+        if (H > 0) inDims.d[2] = H;
+        if (W > 0) inDims.d[3] = W;
+    }
+    if (!ctx_->setInputShape(inputName_.c_str(), inDims)) return false;
+
+    auto fin = ctx_->getTensorShape(inputName_.c_str());
+    inputSize_ = 1; for (int i=0;i<fin.nbDims;++i) inputSize_ *= std::max<int64_t>(1, fin.d[i]);
+    auto fout = ctx_->getTensorShape(outputName_.c_str());
+    outputSize_ = 1; for (int i=0;i<fout.nbDims;++i) outputSize_ *= std::max<int64_t>(1, fout.d[i]);
+
+    CHECK(cudaMalloc(&dIn_, inputSize_ * sizeof(float)));
+    CHECK(cudaMalloc(&dOut_, outputSize_ * sizeof(float)));
+
+    ctx_->setTensorAddress(inputName_.c_str(), dIn_);
+    ctx_->setTensorAddress(outputName_.c_str(), dOut_);
+    return true;
+}
+
 float TrtRunner::run(int iterations, const float* hostInput, float* hostOutput,
                      bool useDefaultStream, bool usePinned, bool pipeline) {
     float* hIn = const_cast<float*>(hostInput);
@@ -45,7 +74,8 @@ float TrtRunner::run(int iterations, const float* hostInput, float* hostOutput,
 
     if (!pipeline) {
         // Single-stream path (default or non-default stream)
-        cudaStream_t stream = useDefaultStream ? 0 : nullptr;
+        // Use nullptr for default stream; create a non-default stream only when requested
+        cudaStream_t stream = nullptr;
         if (!useDefaultStream) CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
         // Preload input and warm-up

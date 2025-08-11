@@ -19,6 +19,11 @@ public:
     // Set batch size, choose IO tensor names automatically if empty
     bool prepare(int batchSize, std::string inputName = std::string(), std::string outputName = std::string());
 
+    // Overload: also set spatial H/W if provided (>0) for dynamic shape engines
+    bool prepare(int batchSize, int H, int W,
+                 std::string inputName = std::string(),
+                 std::string outputName = std::string());
+
     // Run N iterations on provided host data (size must match), return ms
     float run(int iterations, const float* hostInput, float* hostOutput,
               bool useDefaultStream = false,
@@ -30,6 +35,10 @@ public:
     size_t outputSize() const { return outputSize_; }
     const std::string& inputName() const { return inputName_; }
     const std::string& outputName() const { return outputName_; }
+
+    // Dims helpers
+    nvinfer1::Dims inputDims() const { return ctx_ ? ctx_->getTensorShape(inputName_.c_str()) : nvinfer1::Dims{}; }
+    nvinfer1::Dims outputDims() const { return ctx_ ? ctx_->getTensorShape(outputName_.c_str()) : nvinfer1::Dims{}; }
 
 private:
     nvinfer1::ILogger& logger_;

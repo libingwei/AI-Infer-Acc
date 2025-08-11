@@ -23,6 +23,12 @@ cv::Mat preprocessImage(const cv::Mat& src, int W, int H, const PreprocOptions& 
         cv::resize(img, img, cv::Size(W, H));
     }
 
+    // OpenCV loads images as BGR by default, while ImageNet pretrained models (PyTorch/torchvision)
+    // expect RGB order for mean/std normalization. Convert to RGB when imagenetNorm is requested.
+    if (opt.imagenetNorm) {
+        cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+    }
+
     img.convertTo(img, CV_32FC3, 1.0/255.0);
 
     if (opt.imagenetNorm) {

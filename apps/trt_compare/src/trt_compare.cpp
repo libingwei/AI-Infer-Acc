@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <sstream>
 #include <cstdlib>
+#include <sys/stat.h>
 
 #include "NvInfer.h"
 #include "cuda_runtime_api.h"
@@ -18,22 +19,47 @@
 #include <opencv2/opencv.hpp>
 #include <trt_utils/trt_preprocess.h>
 
-static std::vector<std::string> listImages(const std::string& dir) {
-    std::vector<std::string> files;
+static void listImagesRec(const std::string& dir, std::vector<std::string>& files) {
     DIR* dp = opendir(dir.c_str());
-    if (!dp) return files;
+    if (!dp) return;
     dirent* de;
     while ((de = readdir(dp)) != nullptr) {
         std::string name = de->d_name;
         if (name == "." || name == "..") continue;
         std::string path = dir + "/" + name;
+        // Determine if directory
+        bool is_dir = false;
+#ifdef DT_DIR
+        if (de->d_type == DT_DIR) {
+            is_dir = true;
+        } else if (de->d_type == DT_UNKNOWN) {
+            struct stat st{};
+            if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) is_dir = true;
+        }
+#else
+        struct stat st{};
+        if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) is_dir = true;
+#endif
+        if (is_dir) {
+            listImagesRec(path, files);
+            continue;
+        }
         std::string lower = name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower.size() >= 4 && (lower.rfind(".jpg") == lower.size()-4 || lower.rfind(".png") == lower.size()-4)) {
+        // accept common image extensions: .jpg, .jpeg, .png
+        bool is_jpg = (lower.size() >= 4 && lower.rfind(".jpg") == lower.size()-4) ||
+                      (lower.size() >= 5 && lower.rfind(".jpeg") == lower.size()-5);
+        bool is_png = (lower.size() >= 4 && lower.rfind(".png") == lower.size()-4);
+        if (is_jpg || is_png) {
             files.push_back(path);
         }
     }
     closedir(dp);
+}
+
+static std::vector<std::string> listImages(const std::string& dir) {
+    std::vector<std::string> files;
+    listImagesRec(dir, files);
     std::sort(files.begin(), files.end());
     return files;
 }
@@ -59,8 +85,8 @@ static float cosine_sim(const std::vector<float>& a, const std::vector<float>& b
 }
 
 int main(int argc, char** argv) {
-    if (argc < 4 || argc > 9) {
-        std::cerr << "Usage: " << argv[0] << " <baseline_engine_fp32> <test_engine_fp16_or_int8> <images_dir> [max_images] [--labels <labels_csv>] [--center-crop] [--imagenet-norm]" << std::endl;
+    if (argc < 4 || argc > 13) {
+        std::cerr << "Usage: " << argv[0] << " <baseline_engine_fp32> <test_engine_fp16_or_int8> <images_dir> [max_images] [--labels <labels_csv>] [--class-names <tsv>] [--inspect <N>] [--center-crop] [--imagenet-norm]" << std::endl;
         return -1;
     }
     std::string base_engine_path = argv[1];
@@ -68,13 +94,17 @@ int main(int argc, char** argv) {
     std::string images_dir = argv[3];
     int max_images = 200;
     std::string labels_csv;
+    std::string class_names_tsv;
+    int inspect_n = 0;
     // Parse optional args
     PreprocOptions pp;
     for (int i = 4; i < argc; ++i) {
         std::string tok = argv[i];
         if (tok == "--labels" && i+1 < argc) { labels_csv = argv[++i]; continue; }
-        if (tok == "--center-crop") { pp.centerCrop = true; continue; }
+    if (tok == "--center-crop") { pp.centerCrop = true; continue; }
         if (tok == "--imagenet-norm") { pp.imagenetNorm = true; continue; }
+    if (tok == "--class-names" && i+1 < argc) { class_names_tsv = argv[++i]; continue; }
+    if (tok == "--inspect" && i+1 < argc) { inspect_n = std::stoi(argv[++i]); continue; }
         // first free integer becomes max_images
         if (tok.size() && std::all_of(tok.begin(), tok.end(), ::isdigit)) {
             max_images = std::stoi(tok);
@@ -165,6 +195,29 @@ int main(int argc, char** argv) {
         return (pos==std::string::npos) ? p : p.substr(pos+1);
     };
 
+    // Optional: load class names mapping (index -> readable name)
+    std::vector<std::string> class_names;
+    if (!class_names_tsv.empty()) {
+        std::ifstream cf(class_names_tsv);
+        if (!cf) {
+            std::cerr << "Failed to open class names TSV: " << class_names_tsv << std::endl;
+            return -1;
+        }
+        std::string line;
+        while (std::getline(cf, line)) {
+            if (line.empty()) continue;
+            std::stringstream ss(line);
+            std::string idxs, wnid, name;
+            if (!std::getline(ss, idxs, '\t')) continue;
+            if (!std::getline(ss, wnid, '\t')) continue;
+            if (!std::getline(ss, name)) name = wnid;
+            int idx = std::stoi(idxs);
+            if ((int)class_names.size() <= idx) class_names.resize(idx+1);
+            class_names[idx] = name;
+        }
+        std::cout << "Loaded class names: " << class_names.size() << "\n";
+    }
+
     // Metrics accumulators (consistency)
     size_t n = 0, agree_top1 = 0, agree_top5 = 0;
     double sum_cos = 0.0, sum_l2 = 0.0;
@@ -196,8 +249,8 @@ int main(int argc, char** argv) {
 
         CHECK(cudaStreamSynchronize(stream));
 
-        int b1 = argmax(base_out);
-        int t1 = argmax(test_out);
+    int b1 = argmax(base_out);
+    int t1 = argmax(test_out);
         if (b1 == t1) ++agree_top1;
 
         auto b5 = topk(base_out, 5);
@@ -213,6 +266,25 @@ int main(int argc, char** argv) {
         // L2 distance
         double l2=0.0; for (size_t i=0;i<base_out.size();++i){ double d = (double)base_out[i]-test_out[i]; l2 += d*d; }
         sum_l2 += std::sqrt(l2);
+
+        // Optional inspection: print first N predictions with names
+        if (inspect_n > 0 && (int)n < inspect_n) {
+            std::string bn = basename(path);
+            auto toName = [&](int idx){
+                if (!class_names.empty() && idx >= 0 && idx < (int)class_names.size() && !class_names[idx].empty()) return class_names[idx];
+                return std::to_string(idx);
+            };
+            auto topk_names = [&](const std::vector<float>& v, int k){
+                auto idxs = topk(v, k);
+                std::stringstream s;
+                for (size_t i=0;i<idxs.size();++i){ if(i) s<<", "; s<<idxs[i]<<":"<<toName(idxs[i]); }
+                return s.str();
+            };
+            std::cout << "[Inspect] " << bn << " | FP32: " << b1 << ":" << toName(b1)
+                      << " | Test: " << t1 << ":" << toName(t1)
+                      << " | Top5(FP32): " << topk_names(base_out,5)
+                      << " | Top5(Test): " << topk_names(test_out,5) << "\n";
+        }
 
         // Labeled accuracy
         if (!labels.empty()) {

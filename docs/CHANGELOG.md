@@ -27,7 +27,7 @@
 - 新增命令行与环境开关：
   - `--use-default-stream` 或 `USE_DEFAULT_STREAM=1`：使用默认流（否则默认创建非默认流）。
   - `--pinned` 或 `USE_PINNED=1`：启用 pinned host 内存，加速 H2D/D2H。
-  - `--pipeline`：启用双缓冲流水线，使用 `copyStream` 与 `computeStream` 两个非默认流重叠拷贝与计算。
+  - `--pipeline`：启用双缓冲流水线，使用 `copyStream` 与 `computeStream`` 两个非默认流重叠拷贝与计算。
 - 计时：使用 CUDA 事件在相应流上计时，避免全局同步误差。
 - 另外：自动发现输入/输出张量名，避免硬编码 `input`/`output`。
 
@@ -123,3 +123,43 @@ export IMAGENET_NORM=1
 ---
 
 如需把这些开关汇总到 README 的“运行选项速查表”，我可以继续补充文档段落与示例。
+
+日期：2025-08-13
+
+## 总览
+本次围绕“评测文档易用性、离线可复现能力与数据准备体验”进行了整理：
+- README 结构与内容统一，补充最新 Kaggle 实测、目录兼容说明与可读抽检。
+- 离线 ImageNet 类目映射落地（随仓库提供 assets/ 与导出脚本）。
+- ImageNet 准备脚本默认不再重组目录，更贴合常见数据布局。
+- FAQ/故障排查草稿上线，覆盖 Kaggle/TRT/预处理与标签对齐等常见问题。
+
+## 主要改动
+
+### 1) README 整理与最新评测
+文件：`README.md`
+- 统一“构建与环境”与“运行与性能测试”结构；强调构建期将 TRT/cuDNN 真实 .so 复制到 `bin/` 与运行前 `source bin/env.sh`（TRT 内部 dlopen 可能忽略 rpath）。
+- 更新 Kaggle 实测（T4 单卡，TensorRT 10.4，Batch=32）结果与说明；区分默认流/非默认流，补充性能与示例命令。
+- 精度评估部分加入 `--class-names imagenet_classes.tsv` 与 `--inspect` 的可读抽检示例；强调 `--center-crop --imagenet-norm` 预处理；说明递归扫描与“扁平/按 WNID 子目录”两种目录结构均可用，并提供两种结构的示例命令。
+
+### 2) ImageNet 验证集准备脚本默认不重组目录
+文件：`scripts/prepare_imagenet_val.py`
+- 默认保持扁平结构 `imagenet_val/val/*.JPEG`，仅在显式 `--reorg` 时按 WNID 重组为 `val/<wnid>/...`。
+- 优先从 `assets/imagenet_class_index.json` 读取类目映射；回退到 torchvision 包内 JSON；继续解析 devkit `meta.mat` 获取 ILSVRC2012_ID→WNID。
+- 产物：`imagenet_val_labels.csv` 与 `imagenet_classes.tsv`；支持 `.JPEG/.jpeg`。
+
+### 3) 离线类目映射与导出脚本
+文件：`assets/imagenet_class_index.json`, `assets/README.md`, `scripts/export_imagenet_class_index.py`
+- 仓库内置标准 `imagenet_class_index.json` 以保证无网环境下一致标签顺序；脚本可在本地（具备 torch/torchvision）环境中重新导出到 `assets/`。
+
+### 4) trt_compare 增强（配合文档）
+文件：`apps/trt_compare/src/trt_compare.cpp`
+- 参数：`--class-names <tsv>`、`--inspect <N>`；递归收集 `.jpg/.jpeg/.JPEG/.png`；便于人读验证与兼容子目录/扁平目录。
+
+### 5) FAQ/故障排查草稿
+文件：`docs/FAQ.md`
+- 覆盖：Kaggle TRT 软链/丢库问题、env.sh 与 LD_LIBRARY_PATH、ImageNet 预处理/标签映射、val 目录结构兼容、devkit 无 map_clsloc.txt 的处理、离线映射、Kaggle 快速自检、NvInfer.h 找不到等。
+- 在 README 顶部加入链接入口。
+
+## 注意事项
+- 现已默认不重组目录；若此前使用旧版脚本重组为 WNID 子目录，可参考 README/FAQ 的一键还原扁平命令（macOS zsh）。
+- 如评测 Acc 异常，优先检查是否启用 `--center-crop --imagenet-norm` 且是否使用仓库内的 `assets/imagenet_class_index.json`；若在 Kaggle 运行，还需确认 `source bin/env.sh` 已生效。

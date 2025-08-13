@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 VAL_TAR = ROOT / 'datasets' / 'ILSVRC2012_img_val.tar'
 DEVKIT_TAR = ROOT / 'datasets' / 'ILSVRC2012_devkit_t12.tar.gz'
 OUT_DIR = ROOT / 'imagenet_val'
-CSV_PATH = ROOT / 'imagenet_val_labels.csv'
-CLASSES_TSV = ROOT / 'imagenet_classes.tsv'
+CSV_PATH = OUT_DIR / 'imagenet_val_labels.csv'
+CLASSES_TSV = OUT_DIR / 'imagenet_classes.tsv'
 
 # Mapping helpers per devkit
 # Will produce mapping from image filename -> label index (0..999)
@@ -219,10 +219,13 @@ def _load_torchvision_index_entries() -> List[Tuple[int, str, str]] | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Prepare ImageNet val set (subset + labels CSV)')
-    parser.add_argument('--limit', type=int, default=1000, help='Number of images to extract (0 for all). Default: 1000')
+    parser = argparse.ArgumentParser(description='Prepare ImageNet val set (subset + labels CSV and optional calib/eval split)')
+    parser.add_argument('--limit', type=int, default=1000, help='Total images to extract into val/ (0 for all). Default: 1000')
+    parser.add_argument('--calib-count', type=int, default=0, help='Number of images for calibration subset (placed under imagenet_val/calib). 0 to disable split.')
+    parser.add_argument('--eval-count', type=int, default=0, help='Number of images for evaluation subset (placed under imagenet_val/eval). 0 to disable split.')
+    parser.add_argument('--split-mode', type=str, default='head-tail', choices=['head-tail', 'interleave'], help='How to split calib/eval from sorted list. Default: head-tail')
     parser.add_argument('--keep-devkit', dest='keep_devkit', action='store_true', help='Do not delete extracted devkit temp directory')
-    parser.add_argument('--reorg', action='store_true', help='Reorganize images into wnid subfolders (val/<wnid>/...)')
+    parser.add_argument('--reorg', action='store_true', help='Reorganize images into wnid subfolders (val/<wnid>/...). Ignored when calib/eval split is enabled.')
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -231,9 +234,19 @@ def main():
     print('Extracting devkit...')
     gt, idx_to_wnid, idx_to_name = extract_devkit(DEVKIT_TAR, tmp_dir)
 
-    print(f'Extracting validation images (limit={args.limit})...')
+    # If split requested, ensure we extract enough images (calib+eval)
+    requested_total = args.limit
+    if args.calib_count > 0 or args.eval_count > 0:
+        need = max(args.calib_count + args.eval_count, 0)
+        if requested_total and requested_total < need:
+            print(f'Info: limit={requested_total} < calib+eval={need}, increasing limit to {need} for split.')
+            requested_total = need
+        elif requested_total == 0:
+            requested_total = need
+
+    print(f'Extracting validation images (limit={requested_total})...')
     val_dir = OUT_DIR / 'val'
-    extract_val_images(VAL_TAR, val_dir, limit=args.limit)
+    extract_val_images(VAL_TAR, val_dir, limit=requested_total)
 
     # The validation images are named ILSVRC2012_val_00000001.JPEG ... 50000
     # Ground truth labels are 1..1000 (1-based). We'll map to 0..999
@@ -243,28 +256,84 @@ def main():
     if len(files) != len(gt):
         print('Warning: files count and ground truth count differ: ', len(files), len(gt))
 
-    print('Generating labels CSV...')
+    print('Preparing filename→label mapping...')
     wnid_to_idx = _load_torchvision_wnid_to_index()
     # Offline fallback: if torchvision JSON missing, build wnid->index by sorting wnids
     if not wnid_to_idx and idx_to_wnid:
         sorted_wnids = sorted([wn for k, wn in idx_to_wnid.items() if 1 <= k <= 1000])
         wnid_to_idx = {wn: i for i, wn in enumerate(sorted_wnids)}
         print('Built wnid->index mapping by sorted WNIDs (fallback).')
-    with open(CSV_PATH, 'w', newline='') as cf:
-        writer = csv.writer(cf)
-        for i, fname in enumerate(files):
-            idx1 = gt[i]  # 1..1000 (subset aligns with first N by filename sort)
-            # Prefer mapping via WNID to align with torchvision model class order
-            label_to_write = None
-            if idx_to_wnid and wnid_to_idx:
-                wnid = idx_to_wnid.get(idx1)
-                if wnid and wnid in wnid_to_idx:
-                    label_to_write = wnid_to_idx[wnid]
-            if label_to_write is None:
-                # Fallback to ILSVRC2012_ID-1 (may not align with model indices)
-                label_to_write = idx1 - 1
-            writer.writerow([fname, label_to_write])
-    print('Wrote labels CSV to', CSV_PATH)
+    # Build full mapping: filename -> class index
+    fname_to_label = {}
+    for i, fname in enumerate(files):
+        idx1 = gt[i]
+        label_to_write = None
+        if idx_to_wnid and wnid_to_idx:
+            wnid = idx_to_wnid.get(idx1)
+            if wnid and wnid in wnid_to_idx:
+                label_to_write = wnid_to_idx[wnid]
+        if label_to_write is None:
+            label_to_write = idx1 - 1
+        fname_to_label[fname] = label_to_write
+
+    # If split requested, create subsets and only write labels for eval subset
+    do_split = (args.calib_count > 0 or args.eval_count > 0)
+    calib_dir = OUT_DIR / 'calib'
+    eval_dir = OUT_DIR / 'eval'
+    if do_split:
+        calib_list: List[str] = []
+        eval_list: List[str] = []
+        if args.split_mode == 'head-tail':
+            calib_list = files[: max(args.calib_count, 0)]
+            eval_list = files[max(args.calib_count, 0) : max(args.calib_count, 0) + max(args.eval_count, 0)]
+        else:  # interleave
+            # Take alternating samples into calib and eval until counts satisfied
+            c_need, e_need = max(args.calib_count, 0), max(args.eval_count, 0)
+            for f in files:
+                if c_need > 0:
+                    calib_list.append(f); c_need -= 1
+                    if e_need == 0 and c_need == 0:
+                        continue
+                if e_need > 0:
+                    eval_list.append(f); e_need -= 1
+                if c_need == 0 and e_need == 0:
+                    break
+
+        calib_dir.mkdir(parents=True, exist_ok=True)
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        # Copy files
+        for f in calib_list:
+            src = val_dir / f
+            dst = calib_dir / f
+            if src.exists():
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+        for f in eval_list:
+            src = val_dir / f
+            dst = eval_dir / f
+            if src.exists():
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+
+        # Write manifests
+        (OUT_DIR / 'calib_list.txt').write_text('\n'.join(calib_list) + ('\n' if calib_list else ''))
+        (OUT_DIR / 'eval_list.txt').write_text('\n'.join(eval_list) + ('\n' if eval_list else ''))
+
+        # Write labels CSV for eval subset only (used by trt_compare)
+        with open(CSV_PATH, 'w', newline='') as cf:
+            writer = csv.writer(cf)
+            for fname in eval_list:
+                label = fname_to_label.get(fname)
+                if label is not None:
+                    writer.writerow([fname, label])
+        print('Wrote eval labels CSV to', CSV_PATH)
+    else:
+        # Backward compatible: write labels for entire extracted subset under val/
+        with open(CSV_PATH, 'w', newline='') as cf:
+            writer = csv.writer(cf)
+            for fname in files:
+                writer.writerow([fname, fname_to_label[fname]])
+        print('Wrote labels CSV to', CSV_PATH)
 
     # Also write a classes TSV for C++ tools to load readable names easily
     entries = _load_torchvision_index_entries()
@@ -290,7 +359,10 @@ def main():
     print('Wrote labels CSV to', CSV_PATH)
 
     # Optional: reorganize into wnid subfolders if mapping is available and enabled
-    if idx_to_wnid and args.reorg:
+    # When performing calib/eval split, skip reorg to keep subsets稳定
+    if (args.calib_count > 0 or args.eval_count > 0):
+        print('Split enabled: skip folder reorg to keep calib/eval subsets intact.')
+    elif idx_to_wnid and args.reorg:
         print('Reorganizing images into wnid subfolders...')
         moved = 0
         for i, fname in enumerate(files):
@@ -322,8 +394,14 @@ def main():
         except Exception as e:
             print('Warning: failed to remove temp devkit dir:', e)
 
-    print('Done. You can run:')
-    print('  ./bin/trt_compare models/resnet18.trt models/resnet18_int8.trt', val_dir, '200 --labels', CSV_PATH)
+    print('Done. Next steps:')
+    if do_split:
+        print('  # INT8 标定建议使用（无需标签）')
+        print('  export CALIB_DATA_DIR', '=', calib_dir)
+        print('  # 评估与一致性对比（使用 eval 子集 + labels）:')
+        print('  ./bin/trt_compare models/resnet18.trt models/resnet18_int8.trt', eval_dir, '1000 --labels', CSV_PATH, '--class-names', CLASSES_TSV)
+    else:
+        print('  ./bin/trt_compare models/resnet18.trt models/resnet18_int8.trt', val_dir, '200 --labels', CSV_PATH)
 
 if __name__ == '__main__':
     main()

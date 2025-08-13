@@ -195,6 +195,7 @@ Top-1 Agreement: 98%
 Top-5 Agreement: 100%
 Avg Cosine Similarity: 0.999991
 Avg L2 Distance: 0.327497
+
 trt_compare resnet18 vs resnet18_int8
 Evaluating on 200 images (H=224, W=224)
 
@@ -288,6 +289,40 @@ Labeled Samples: 1000
 FP32 Top-1: 69%, Top-5: 88.8%
 Test Top-1: 53.1%, Top-5: 77.5%
 Delta Top-1: -15.9 pp, Delta Top-5: -11.3 pp
+
+```
+
+使用普通图片进行标定的int8模型在准确性上有明显下降，尤其是Top-1准确率从69%降至53.1%。而FP16模型与FP32模型的Top-1准确率差异较小，均在69%左右。
+后面改用ImageNet的标定版本,明显改善,甚至出现比FP32有提升，Top-1从69%到69.3%, Top-5从88.8%到88.9%, 输出结果如下：
+
+```bash
+-----FP32 vs INT8-----
+Evaluating on 1000 images (H=224, W=224)
+Loaded labels from imagenet_val_labels.csv, entries: 1000
+Loaded class names: 1000
+[Inspect] ILSVRC2012_val_00000001.JPEG | FP32: 65:sea_snake | Test: 65:sea_snake | Top5(FP32): 65:sea_snake, 58:water_snake, 63:Indian_cobra, 62:rock_python, 54:hognose_snake | Top5(Test): 65:sea_snake, 58:water_snake, 62:rock_python, 54:hognose_snake, 63:Indian_cobra
+[Inspect] ILSVRC2012_val_00000002.JPEG | FP32: 795:ski | Test: 795:ski | Top5(FP32): 795:ski, 970:alp, 792:shovel, 537:dogsled, 672:mountain_tent | Top5(Test): 795:ski, 970:alp, 792:shovel, 537:dogsled, 672:mountain_tent
+[Inspect] ILSVRC2012_val_00000003.JPEG | FP32: 230:Shetland_sheepdog | Test: 230:Shetland_sheepdog | Top5(FP32): 230:Shetland_sheepdog, 231:collie, 157:papillon, 169:borzoi, 232:Border_collie | Top5(Test): 230:Shetland_sheepdog, 231:collie, 157:papillon, 169:borzoi, 232:Border_collie
+[Inspect] ILSVRC2012_val_00000004.JPEG | FP32: 809:soup_bowl | Test: 809:soup_bowl | Top5(FP32): 809:soup_bowl, 659:mixing_bowl, 968:cup, 967:espresso, 666:mortar | Top5(Test): 809:soup_bowl, 659:mixing_bowl, 968:cup, 967:espresso, 666:mortar
+[Inspect] ILSVRC2012_val_00000005.JPEG | FP32: 520:crib | Test: 520:crib | Top5(FP32): 520:crib, 831:studio_couch, 516:cradle, 721:pillow, 750:quilt | Top5(Test): 520:crib, 516:cradle, 831:studio_couch, 721:pillow, 850:teddy
+[Inspect] ILSVRC2012_val_00000006.JPEG | FP32: 60:night_snake | Test: 60:night_snake | Top5(FP32): 60:night_snake, 65:sea_snake, 58:water_snake, 68:sidewinder, 67:diamondback | Top5(Test): 60:night_snake, 65:sea_snake, 58:water_snake, 68:sidewinder, 67:diamondback
+[Inspect] ILSVRC2012_val_00000007.JPEG | FP32: 334:porcupine | Test: 334:porcupine | Top5(FP32): 334:porcupine, 102:echidna, 337:beaver, 342:wild_boar, 341:hog | Top5(Test): 334:porcupine, 102:echidna, 337:beaver, 342:wild_boar, 341:hog
+[Inspect] ILSVRC2012_val_00000008.JPEG | FP32: 429:baseball | Test: 429:baseball | Top5(FP32): 429:baseball, 934:hotdog, 551:face_powder, 928:ice_cream, 502:clog | Top5(Test): 429:baseball, 934:hotdog, 928:ice_cream, 551:face_powder, 852:tennis_ball
+[Inspect] ILSVRC2012_val_00000009.JPEG | FP32: 674:mousetrap | Test: 674:mousetrap | Top5(FP32): 674:mousetrap, 341:hog, 342:wild_boar, 998:ear, 106:wombat | Top5(Test): 674:mousetrap, 341:hog, 342:wild_boar, 998:ear, 106:wombat
+[Inspect] ILSVRC2012_val_00000010.JPEG | FP32: 153:Maltese_dog | Test: 153:Maltese_dog | Top5(FP32): 153:Maltese_dog, 903:wig, 204:Lhasa, 332:Angora, 283:Persian_cat | Top5(Test): 153:Maltese_dog, 204:Lhasa, 903:wig, 283:Persian_cat, 332:Angora
+
+=== Accuracy Consistency Report ===
+Samples: 1000
+Top-1 Agreement: 95.6%
+Top-5 Agreement: 100%
+Avg Cosine Similarity: 0.998143
+Avg L2 Distance: 5.26329
+
+=== Labeled Accuracy Report ===
+Labeled Samples: 1000
+FP32 Top-1: 69%, Top-5: 88.8%
+Test Top-1: 69.3%, Top-5: 88.9%
+Delta Top-1: 0.3 pp, Delta Top-5: 0.1 pp
 
 ```
 

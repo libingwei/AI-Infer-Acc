@@ -69,16 +69,26 @@ std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std
         if (const char* e = std::getenv("INT8_FP16_LAST")) { std::string v=e; if (v=="1"||v=="true") protectLast=true; }
         if (const char* e = std::getenv("INT8_FP32_SOFTMAX")) { std::string v=e; if (v=="1"||v=="true") protectSoftmax=true; }
 
-        if (protectFirst || protectLast || protectSoftmax) {
+        // Per-layer overrides by name (comma-separated substrings)
+        auto splitCsv = [](const std::string& s) {
+            std::vector<std::string> out; std::string cur; for (char c: s){ if(c==','){ if(!cur.empty()) out.push_back(cur); cur.clear(); } else cur.push_back(c);} if(!cur.empty()) out.push_back(cur); return out; };
+        std::vector<std::string> forceHalfNames, forceFloatNames;
+        if (const char* e = std::getenv("INT8_FORCE_FP16_LAYERS")) forceHalfNames = splitCsv(e);
+        if (const char* e = std::getenv("INT8_FORCE_FP32_LAYERS")) forceFloatNames = splitCsv(e);
+        bool anyForced = !forceHalfNames.empty() || !forceFloatNames.empty();
+        bool verboseLayers = false; if (const char* e = std::getenv("INT8_VERBOSE_LAYERS")) { std::string v=e; if (v=="1"||v=="true") verboseLayers=true; }
+
+        if (protectFirst || protectLast || protectSoftmax || anyForced) {
             config->setFlag(nvinfer1::BuilderFlag::kFP16); // allow FP16 when needed
             config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED);
             config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
-            // Apply per-layer constraints heuristically
             int nbLayers = network->getNbLayers();
+
             if (protectFirst && nbLayers > 0) {
                 auto* l0 = network->getLayer(0);
                 l0->setPrecision(nvinfer1::DataType::kHALF);
-                l0->setOutputType(0, nvinfer1::DataType::kHALF);
+                int nOuts = l0->getNbOutputs();
+                for (int i=0;i<nOuts;++i) l0->setOutputType(i, nvinfer1::DataType::kHALF);
             }
             if (protectLast && nbLayers > 0) {
                 auto* ln = network->getLayer(nbLayers - 1);
@@ -90,6 +100,26 @@ std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std
                 for (int i = 0; i < nbLayers; ++i) {
                     auto* lyr = network->getLayer(i);
                     if (lyr->getType() == nvinfer1::LayerType::kSOFTMAX) {
+                        lyr->setPrecision(nvinfer1::DataType::kFLOAT);
+                        int nOuts = lyr->getNbOutputs();
+                        for (int j=0;j<nOuts;++j) lyr->setOutputType(j, nvinfer1::DataType::kFLOAT);
+                    }
+                }
+            }
+            if (anyForced) {
+                for (int i = 0; i < nbLayers; ++i) {
+                    auto* lyr = network->getLayer(i);
+                    const char* nmC = lyr->getName();
+                    std::string nm = nmC ? std::string(nmC) : std::string();
+                    auto matchAny = [&](const std::vector<std::string>& keys){ for (auto& k: keys){ if(!k.empty() && nm.find(k) != std::string::npos) return true; } return false; };
+                    if (matchAny(forceHalfNames)) {
+                        if (verboseLayers) std::cout << "[INT8] Force FP16 layer: " << nm << std::endl;
+                        lyr->setPrecision(nvinfer1::DataType::kHALF);
+                        int nOuts = lyr->getNbOutputs();
+                        for (int j=0;j<nOuts;++j) lyr->setOutputType(j, nvinfer1::DataType::kHALF);
+                    }
+                    if (matchAny(forceFloatNames)) {
+                        if (verboseLayers) std::cout << "[INT8] Force FP32 layer: " << nm << std::endl;
                         lyr->setPrecision(nvinfer1::DataType::kFLOAT);
                         int nOuts = lyr->getNbOutputs();
                         for (int j=0;j<nOuts;++j) lyr->setOutputType(j, nvinfer1::DataType::kFLOAT);

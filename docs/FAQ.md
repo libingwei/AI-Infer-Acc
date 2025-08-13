@@ -69,3 +69,58 @@ rmdir val/*(/)
 ---
 
 若你的问题不在以上列表，请提交 issue 并附上：机器/驱动/CUDA/TRT 版本、是否已 `source bin/env.sh`、运行目录结构截图与关键日志片段，便于排查。
+
+## 9. INT8 如何提升“精度与一致性”？常用招式、原理与取舍
+
+背景：INT8 量化的两个常见衡量维度是
+- 带标签精度（Top-1/Top-5 准确率是否接近 FP32 基线）；
+- 一致性（与 FP32/FP16 的 Top-1 预测一致率、embedding 相似度等）。
+
+即便标注精度已对齐，一致性可能仍低于 FP16（例如 95%~98% 区间）。下述手段可在不牺牲精度的前提下，帮助进一步拉高一致性。
+
+1) 标定数据与预处理对齐
+- 原理：校准统计决定每层激活的量化缩放/阈值；数据分布和预处理若与推理场景不匹配，会导致统计偏移。
+- 做法：
+	- 使用与评测一致的样本分布与规模（建议 ≥1k，更多更稳）。
+	- 预处理严格一致：中心裁剪 + ImageNet 归一化。
+	- 仓库支持：
+		- 标定阶段：
+			- IMAGENET_CENTER_CROP=1：短边 256 → 居中裁剪到 WxH
+			- IMAGENET_NORM=1：BGR→RGB、缩放到 [0,1]、再用 ImageNet mean/std 归一化
+			- CALIB_RECURSIVE=1：递归搜集 .jpg/.jpeg/.png（含大小写）
+			- CALIB_USE_CACHE=0：默认不读旧缓存，避免“吃老本”
+		- 评测阶段：trt_compare 加 --center-crop --imagenet-norm
+- 取舍：无额外性能代价，但需确保数据准备到位。
+
+2) 标定算法切换：Entropy ↔ MinMax
+- 原理：不同算法对激活分布的估计方式不同（熵 vs 极值），可能在某些模型/层分布下更贴近 FP32。
+- 做法：设置环境变量 CALIB_ALGO=minmax 即可启用 MinMax；默认 entropy。
+	- 构建示例：
+		```bash
+		export CALIB_ALGO=minmax
+		export CALIB_USE_CACHE=0
+		build/bin/onnx_to_trt models/resnet18.onnx models/resnet18 int8 calibration_data
+		```
+- 取舍：不同模型表现不同；建议 A/B 对比后取更优者。不改变推理时延（标定时长略有差异可忽略）。
+
+3) 小范围“混合精度保护”
+- 原理：部分敏感层（常见：首层特征提取、末层分类头、Softmax）对量化误差更敏感，保持这些层为 FP16/FP32 可提升一致性与稳定性。
+- 做法：按需打开以下开关（可叠加）：
+	- INT8_FP16_FIRST=1：首层用 FP16
+	- INT8_FP16_LAST=1：末层用 FP16
+	- INT8_FP32_SOFTMAX=1：Softmax 层用 FP32
+	- 示例：
+		```bash
+		export CALIB_ALGO=minmax          # 可选
+		export INT8_FP16_LAST=1           # 常见高性价比选择
+		export CALIB_USE_CACHE=0
+		build/bin/onnx_to_trt models/resnet18.onnx models/resnet18 int8 calibration_data
+		```
+- 取舍：极少数层使用更高精度，通常几乎不影响整体时延；一致性往往明显提升。若需纯 INT8，可不启用。
+
+4) 其他建议与常见误区
+- 增加标定样本多样性与数量，覆盖不同明暗/场景/类别。
+- 确保不复用过期 calibration cache（默认已关闭读取；如需复用，显式 `CALIB_USE_CACHE=1`）。
+- 多次重复构建/评测取均值，避免偶发抖动误判。
+
+小结：按“标定对齐 → 算法 A/B → 末层 FP16 →（必要时）首层/Softmax 保护”的顺序逐步加码，通常能把 Top-1 一致性提升到接近 FP16 的水平，同时保持带标签精度不退化。

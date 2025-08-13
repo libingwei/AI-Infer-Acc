@@ -131,13 +131,33 @@ std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std
         std::cout << "Build FP32" << std::endl;
     }
 
-    // Opt profile
+    // Opt profile with optional dynamic H/W
     nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
     outInputName = network->getInput(0)->getName();
     auto input_dims = network->getInput(0)->getDimensions();
-    input_dims.d[0] = 1; profile->setDimensions(outInputName.c_str(), nvinfer1::OptProfileSelector::kMIN, input_dims);
-    input_dims.d[0] = 1; profile->setDimensions(outInputName.c_str(), nvinfer1::OptProfileSelector::kOPT, input_dims);
-    input_dims.d[0] = opt.maxBatch; profile->setDimensions(outInputName.c_str(), nvinfer1::OptProfileSelector::kMAX, input_dims);
+    // Expect NCHW; protect against -1 (dynamic) dimensions
+    auto setDims = [&](nvinfer1::OptProfileSelector sel, int n, int c, int h, int w){
+        auto d = input_dims;
+        if (n > 0) d.d[0] = n;
+        if (d.nbDims >= 4) {
+            if (c > 0) d.d[1] = c;
+            if (h > 0) d.d[2] = h;
+            if (w > 0) d.d[3] = w;
+        }
+        profile->setDimensions(outInputName.c_str(), sel, d);
+    };
+    // MIN
+    int minH = opt.hwMinH > 0 ? opt.hwMinH : (input_dims.nbDims>=4 ? input_dims.d[2] : -1);
+    int minW = opt.hwMinW > 0 ? opt.hwMinW : (input_dims.nbDims>=4 ? input_dims.d[3] : -1);
+    setDims(nvinfer1::OptProfileSelector::kMIN, 1, (input_dims.nbDims>=4? input_dims.d[1]: -1), minH, minW);
+    // OPT
+    int optH = opt.hwOptH > 0 ? opt.hwOptH : minH;
+    int optW = opt.hwOptW > 0 ? opt.hwOptW : minW;
+    setDims(nvinfer1::OptProfileSelector::kOPT, 1, (input_dims.nbDims>=4? input_dims.d[1]: -1), optH, optW);
+    // MAX
+    int maxH = opt.hwMaxH > 0 ? opt.hwMaxH : optH;
+    int maxW = opt.hwMaxW > 0 ? opt.hwMaxW : optW;
+    setDims(nvinfer1::OptProfileSelector::kMAX, opt.maxBatch, (input_dims.nbDims>=4? input_dims.d[1]: -1), maxH, maxW);
     config->addOptimizationProfile(profile);
 
     auto ser = builder->buildSerializedNetwork(*network, *config);

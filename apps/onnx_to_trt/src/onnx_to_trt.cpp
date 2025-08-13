@@ -16,9 +16,9 @@
 #include <trt_utils/trt_common.h>
 
 int main(int argc, char** argv) {
-    if (argc < 4 || argc > 5) {
+    if (argc < 4) {
         std::cerr << "Usage: " << argv[0]
-                  << " <input_onnx_path> <output_base_name> <precision> [calib_data_dir]" << std::endl;
+                  << " <input_onnx_path> <output_base_name> <precision> [calib_data_dir] [--hw-min HxW] [--hw-opt HxW] [--hw-max HxW]" << std::endl;
         std::cerr << "  <precision> can be: fp32, fp16, int8" << std::endl;
         return -1;
     }
@@ -29,6 +29,13 @@ int main(int argc, char** argv) {
     TrtLogger gLogger;
 
     BuildOptions opt; opt.precision = precision; if (argc>=5) opt.calibDataDir = argv[4];
+    auto parseHxW = [](const std::string& s, int& H, int& W){ auto x = s.find('x'); if (x==std::string::npos) return false; H=std::stoi(s.substr(0,x)); W=std::stoi(s.substr(x+1)); return H>0 && W>0; };
+    for (int i = 5; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--hw-min" && i+1 < argc) { ++i; parseHxW(argv[i], opt.hwMinH, opt.hwMinW); }
+        else if (a == "--hw-opt" && i+1 < argc) { ++i; parseHxW(argv[i], opt.hwOptH, opt.hwOptW); }
+        else if (a == "--hw-max" && i+1 < argc) { ++i; parseHxW(argv[i], opt.hwMaxH, opt.hwMaxW); }
+    }
     int W=0,H=0; std::string inName;
     TrtEngineBuilder builder(gLogger);
     auto ser = builder.buildFromOnnx(onnx_filename, opt, W, H, inName);

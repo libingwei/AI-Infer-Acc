@@ -14,6 +14,10 @@ struct BuildOptions {
     std::string calibDataDir;        // used when int8
     std::string calibTable = "int8_calib_table.cache";
     int maxBatch = 32;               // optimization profile max batch
+    // Optional dynamic H/W optimization profiles (0 means keep from ONNX)
+    int hwMinH = 0, hwMinW = 0;
+    int hwOptH = 0, hwOptW = 0;
+    int hwMaxH = 0, hwMaxW = 0;
 };
 
 class TrtEngineBuilder {

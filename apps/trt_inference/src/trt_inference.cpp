@@ -10,7 +10,7 @@
 #include <trt_utils/trt_runtime.h>
 
 int main(int argc, char** argv) {
-    if (argc < 2 || argc > 6) {
+    if (argc < 2 || argc > 8) {
         std::cerr << "Usage: " << argv[0] << " <path_to_engine_file> [batch_size] [--use-default-stream] [--pinned] [--pipeline]" << std::endl;
         std::cerr << "  If --use-default-stream is omitted, a non-default CUDA stream will be created and used." << std::endl;
         std::cerr << "  Use --pinned or env USE_PINNED=1 to allocate pinned host memory for H2D/D2H." << std::endl;
@@ -31,12 +31,15 @@ int main(int argc, char** argv) {
             batch_size = std::stoi(a2);
         }
     }
+    int optH = 0, optW = 0;
+    auto parseHxW = [&](const std::string& s){ auto x=s.find('x'); if(x==std::string::npos) return false; optH=std::stoi(s.substr(0,x)); optW=std::stoi(s.substr(x+1)); return optH>0&&optW>0; };
     if (argc >= 4) {
         for (int i = 3; i < argc; ++i) {
             std::string a = argv[i];
             if (a == "--use-default-stream") useDefaultStream = true;
             if (a == "--pinned") usePinned = true;
             if (a == "--pipeline") usePipeline = true;
+            if (a == "--hw" && i+1 < argc) { ++i; parseHxW(argv[i]); }
         }
     }
 
@@ -63,7 +66,10 @@ int main(int argc, char** argv) {
     TrtLogger gLogger;
     TrtRunner runner(gLogger);
     if (!runner.loadEngineFromFile(engine_filename)) { std::cerr << "Failed to load engine" << std::endl; return -1; }
-    if (!runner.prepare(batch_size)) { std::cerr << "Failed to prepare context" << std::endl; return -1; }
+    bool prepared = false;
+    if (optH>0 && optW>0) prepared = runner.prepare(batch_size, optH, optW);
+    else prepared = runner.prepare(batch_size);
+    if (!prepared) { std::cerr << "Failed to prepare context" << std::endl; return -1; }
 
     // 5. Prepare and copy input data
     std::vector<float> host_input_vec; float* host_input = nullptr; // raw pointer for pinned path

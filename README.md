@@ -291,15 +291,22 @@ rmdir val/*(/)
 	- IMAGENET_CENTER_CROP=1：校准预处理启用“短边缩放到256 + 中心裁剪”
 	- IMAGENET_NORM=1：校准预处理启用 ImageNet mean/std 标准化（先缩放到[0,1]再标准化）
 - 说明：
-	- 自动创建动态输入的优化配置档（min=1, opt=1, max=32）；若缺省分辨率无法解析，会回退到 224x224。
+	- 支持配置动态分辨率优化档：
+		- --hw-min HxW、--hw-opt HxW、--hw-max HxW（例如 320x320 / 640x640 / 1280x1280）
+		- 未显式指定时，将使用缺省档位；个别模型无法解析输入尺寸时会回退到 224x224。
 	- INT8 会自动读写校准缓存，无需重复标定（当缓存命中时）。
 
 示例：
 
 ```bash
+# INT8：按 ImageNet 预处理进行标定
 CALIB_DATA_DIR=calibration_data \
 IMAGENET_CENTER_CROP=1 IMAGENET_NORM=1 \
 ./bin/onnx_to_trt models/resnet18.onnx models/resnet18 int8
+
+# 动态分辨率（分类模型示例）
+./bin/onnx_to_trt models/resnet18.onnx models/resnet18_fp16 fp16 \
+  --hw-min 224x224 --hw-opt 224x224 --hw-max 1024x1024
 ```
 
 ### trt_inference（推理/基准测试）
@@ -311,6 +318,7 @@ IMAGENET_CENTER_CROP=1 IMAGENET_NORM=1 \
 	- --use-default-stream：使用默认 CUDA Stream（stream 0）
 	- --pinned：使用固定页锁定内存（cudaHostAlloc）进行 H2D/D2H 拷贝
 	- --pipeline：启用双缓冲 + 复制/计算双流流水线以争取拷贝/计算重叠
+	- --hw HxW：当引擎为动态分辨率时，设置运行期输入高度与宽度（如 640x640）
 - 环境变量：
 	- USE_DEFAULT_STREAM=1|true：等效于 --use-default-stream
 	- USE_PINNED=1|true：等效于 --pinned
@@ -319,6 +327,9 @@ IMAGENET_CENTER_CROP=1 IMAGENET_NORM=1 \
 
 ```bash
 USE_PINNED=1 ./bin/trt_inference models/resnet18_int8.trt 32 --pipeline
+
+# 在动态分辨率引擎上指定 640x640 运行（例如检测/分割场景）
+./bin/trt_inference models/resnet18_fp16.trt 8 --hw 640x640
 ```
 
 ### trt_compare（一致性与精度对比）

@@ -51,3 +51,49 @@ void hwcToChw(const cv::Mat& img, float* dst) {
     memcpy(dst + plane, ch[1].data, plane * sizeof(float));
     memcpy(dst + 2 * plane, ch[2].data, plane * sizeof(float));
 }
+
+cv::Mat preprocessImageWithMeanStd(const cv::Mat& src, int W, int H,
+                                   bool centerCrop,
+                                   bool toRGB,
+                                   bool scaleTo01,
+                                   const cv::Scalar* mean,
+                                   const cv::Scalar* stdv)
+{
+    cv::Mat img = src;
+    if (centerCrop) {
+        int shortSide = 256;
+        int ih = img.rows, iw = img.cols;
+        float scale = (iw < ih) ? (shortSide / static_cast<float>(iw)) : (shortSide / static_cast<float>(ih));
+        int newW = static_cast<int>(std::round(iw * scale));
+        int newH = static_cast<int>(std::round(ih * scale));
+        cv::resize(img, img, cv::Size(newW, newH));
+        int x = (newW - W) / 2;
+        int y = (newH - H) / 2;
+        x = std::max(0, x); y = std::max(0, y);
+        x = std::min(x, std::max(0, newW - W));
+        y = std::min(y, std::max(0, newH - H));
+        cv::Rect roi(x, y, std::min(W, newW), std::min(H, newH));
+        img = img(roi).clone();
+        if (img.cols != W || img.rows != H) cv::resize(img, img, cv::Size(W, H));
+    } else {
+        cv::resize(img, img, cv::Size(W, H));
+    }
+
+    if (toRGB) {
+        cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+    }
+
+    if (scaleTo01) {
+        img.convertTo(img, CV_32FC3, 1.0/255.0);
+    } else {
+        img.convertTo(img, CV_32FC3);
+    }
+
+    if (mean && stdv) {
+        cv::Mat meanMat(img.size(), img.type(), *mean);
+        cv::Mat stdMat(img.size(), img.type(), *stdv);
+        cv::subtract(img, meanMat, img);
+        cv::divide(img, stdMat, img);
+    }
+    return img;
+}

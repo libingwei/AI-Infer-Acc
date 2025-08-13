@@ -46,4 +46,9 @@ public:
     static std::string firstTensorName(const nvinfer1::ICudaEngine& engine,
                                        nvinfer1::TensorIOMode mode,
                                        const char* defaultName);
+    // Collect image files under a directory root (non-recursive) with common extensions.
+    // Returns sorted, de-duplicated absolute/relative paths as matched by glob.
+    static std::vector<std::string> collectImages(const std::string& dir,
+                                                  const std::vector<std::string>& exts = {"jpg","JPG","jpeg","JPEG","png","PNG"},
+                                                  bool recursive = false);
 };

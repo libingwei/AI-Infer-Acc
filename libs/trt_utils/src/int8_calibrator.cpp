@@ -15,17 +15,7 @@
 
 #include <trt_utils/trt_preprocess.h>
 
-// Function to get a list of files in a directory matching a pattern
-std::vector<std::string> glob(const std::string& pattern) {
-    glob_t glob_result;
-    glob(pattern.c_str(), GLOB_TILDE, NULL, &glob_result);
-    std::vector<std::string> files;
-    for(unsigned int i=0; i<glob_result.gl_pathc; ++i){
-        files.push_back(std::string(glob_result.gl_pathv[i]));
-    }
-    globfree(&glob_result);
-    return files;
-}
+// glob helper moved to trt_utils::TrtHelpers::collectImages
 
 Int8Calibrator::Int8Calibrator(int batchSize, int inputW, int inputH, const std::string& calibDataDirPath, 
                                const std::string& calibTableName, const char* inputBlobName, bool readCache)
@@ -43,13 +33,12 @@ Int8Calibrator::Int8Calibrator(int batchSize, int inputW, int inputH, const std:
     inputCount = 3 * inputW * inputH;
     hostInput.resize(batchSize * inputCount);
 
-    // Get all image file paths
-    imgPaths = glob(calibDataDirPath + "/*.jpg"); // Assuming JPEG images
+    // Get all image file paths (support common extensions, case-insensitive)
+    bool recursive = false; if (const char* e = std::getenv("CALIB_RECURSIVE")) { std::string v=e; if (v=="1"||v=="true") recursive=true; }
+    imgPaths = TrtHelpers::collectImages(calibDataDirPath, {"jpg","JPG","jpeg","JPEG","png","PNG"}, recursive);
     if (imgPaths.empty()) {
-        imgPaths = glob(calibDataDirPath + "/*.png"); // Or PNG images
-    }
-    if (imgPaths.empty()) {
-        std::cerr << "Error: No images found in directory: " << calibDataDirPath << std::endl;
+        std::cerr << "Error: No images found in directory: " << calibDataDirPath
+                  << " (supported: .jpg/.jpeg/.png, case-insensitive)" << std::endl;
         exit(1);
     }
     std::cout << "Found " << imgPaths.size() << " images for calibration." << std::endl;

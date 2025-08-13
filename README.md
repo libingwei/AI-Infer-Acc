@@ -69,6 +69,17 @@ pip install -r requirements.txt
 python scripts/download_calibration_data.py
 ```
 
+可选：标定图片收集选项
+- CALIB_RECURSIVE=1 启用递归收集子目录下的图片（默认关闭，仅扫描目录根）
+- 支持的扩展名：.jpg/.jpeg/.png（大小写均可）
+
+示例：
+```bash
+# 递归使用自备标定集（ImageNet 风格推荐用于分类），并与后续推理预处理对齐
+CALIB_RECURSIVE=1 IMAGENET_CENTER_CROP=1 IMAGENET_NORM=1 \
+./bin/onnx_to_trt models/resnet18.onnx models/resnet18 int8
+```
+
 ### 3) 生成 ONNX 模型
 
 

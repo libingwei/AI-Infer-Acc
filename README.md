@@ -15,6 +15,18 @@ AI 推理加速计划
 
 > 常见问题与故障排查请见：[`docs/FAQ.md`](docs/FAQ.md)
 
+> 专注方向：YOLOv8 加速与部署
+
+本仓库包含一个专注于 YOLOv8 的加速子项目，覆盖从 ONNX 导出、TensorRT 引擎转换（FP32/FP16/INT8，动态 H×W）、到推理与可视化、以及插件化后处理的完整链路。建议直接参考：
+
+- `projects/trt-yolov8-accelerator/README.md`
+
+子项目提供：
+- 导出脚本 `scripts/export_yolov8_onnx.py`（支持 `--device/--nms/--half/--simplify`，并打印 I/O 形状）
+- 转换工具 `onnx_to_trt_yolo`（支持 `--fp32/--fp16/--int8`、INT8 标定、动态 H×W、占位 `--decode-plugin`）
+- 推理工具 `yolo_trt_infer`（支持 `--decode cpu|plugin`、`--has-nms`、`--class-agnostic`、`--topk`）
+- 共享工具库：letterbox 预处理、CPU 解码与 NMS 等
+
 ## 构建与环境 (Build & Environment)
 
 ### 下载代码
@@ -102,6 +114,13 @@ cmake --build build -- -j4
 ```
 
 编译成功后，所有可执行文件将位于 `bin/` 目录下。
+
+提示：YOLOv8 子项目可单独启用插件目标（实验）：
+
+```bash
+cmake -S . -B build -DYOLO_BUILD_PLUGINS=ON
+cmake --build build -j
+```
 
 提示：构建过程会将 TensorRT/cuDNN 等运行库复制并“就地”放入 `bin/`，并写出 `bin/env.sh` 用于设置运行期 `LD_LIBRARY_PATH`（某些场景下，TensorRT 内部 dlopen 会忽略 rpath，需显式导出）。运行前可：
 

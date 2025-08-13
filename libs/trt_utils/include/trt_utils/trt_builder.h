@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <functional>
 
 #include "NvInfer.h"
 #include "NvOnnxParser.h"
@@ -31,6 +32,17 @@ public:
                                                          int& outInputH,
                                                          std::string& outInputName,
                                                          nvinfer1::IInt8Calibrator* extCalibrator = nullptr);
+
+    // Advanced: allows a caller-provided customization hook to mutate the network/config
+    // after ONNX is parsed but before building. The hook may add/remove layers, plugins,
+    // outputs, precision constraints, etc.
+    std::unique_ptr<nvinfer1::IHostMemory> buildFromOnnx(const std::string& onnxPath,
+                                                         const BuildOptions& opt,
+                                                         int& outInputW,
+                                                         int& outInputH,
+                                                         std::string& outInputName,
+                                                         nvinfer1::IInt8Calibrator* extCalibrator,
+                                                         const std::function<void(nvinfer1::INetworkDefinition&, nvinfer1::IBuilderConfig&)>& customizeFn);
 private:
     nvinfer1::ILogger& logger_;
 };

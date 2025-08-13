@@ -4,12 +4,14 @@
 #include <cstdlib>
 #include <iostream>
 
-std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std::string& onnxPath,
-                                                                        const BuildOptions& opt,
-                                                                        int& outInputW,
-                                                                        int& outInputH,
-                                                                        std::string& outInputName,
-                                                                        nvinfer1::IInt8Calibrator* extCalibrator) {
+static std::unique_ptr<nvinfer1::IHostMemory> _build_impl(nvinfer1::ILogger& logger_,
+                                                          const std::string& onnxPath,
+                                                          const BuildOptions& opt,
+                                                          int& outInputW,
+                                                          int& outInputH,
+                                                          std::string& outInputName,
+                                                          nvinfer1::IInt8Calibrator* extCalibrator,
+                                                          const std::function<void(nvinfer1::INetworkDefinition&, nvinfer1::IBuilderConfig&)>& customizeFn) {
     std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger_));
     if (!builder) { std::cerr << "Failed to create builder" << std::endl; return nullptr; }
     std::unique_ptr<nvinfer1::INetworkDefinition> network(builder->createNetworkV2(0U));
@@ -160,7 +162,31 @@ std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std
     setDims(nvinfer1::OptProfileSelector::kMAX, opt.maxBatch, (input_dims.nbDims>=4? input_dims.d[1]: -1), maxH, maxW);
     config->addOptimizationProfile(profile);
 
+    // Allow caller to mutate network/config (e.g., insert plugins)
+    if (customizeFn) {
+        customizeFn(*network, *config);
+    }
+
     auto ser = builder->buildSerializedNetwork(*network, *config);
     if (!ser) { std::cerr << "Failed to build engine" << std::endl; return nullptr; }
     return std::unique_ptr<nvinfer1::IHostMemory>(ser);
+}
+
+std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std::string& onnxPath,
+                                                                        const BuildOptions& opt,
+                                                                        int& outInputW,
+                                                                        int& outInputH,
+                                                                        std::string& outInputName,
+                                                                        nvinfer1::IInt8Calibrator* extCalibrator) {
+    return _build_impl(logger_, onnxPath, opt, outInputW, outInputH, outInputName, extCalibrator, nullptr);
+}
+
+std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std::string& onnxPath,
+                                                                        const BuildOptions& opt,
+                                                                        int& outInputW,
+                                                                        int& outInputH,
+                                                                        std::string& outInputName,
+                                                                        nvinfer1::IInt8Calibrator* extCalibrator,
+                                                                        const std::function<void(nvinfer1::INetworkDefinition&, nvinfer1::IBuilderConfig&)>& customizeFn) {
+    return _build_impl(logger_, onnxPath, opt, outInputW, outInputH, outInputName, extCalibrator, customizeFn);
 }

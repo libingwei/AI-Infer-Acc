@@ -97,3 +97,41 @@ cv::Mat preprocessImageWithMeanStd(const cv::Mat& src, int W, int H,
     }
     return img;
 }
+
+cv::Mat preprocessLetterboxWithMeanStd(const cv::Mat& src, int W, int H,
+                                       bool toRGB,
+                                       bool scaleTo01,
+                                       const cv::Scalar* mean,
+                                       const cv::Scalar* stdv,
+                                       const cv::Scalar& padColor,
+                                       LetterboxInfo* outInfo)
+{
+    cv::Mat img = src;
+    int iw = img.cols, ih = img.rows;
+    float scale = std::min(W / static_cast<float>(iw), H / static_cast<float>(ih));
+    int nw = static_cast<int>(std::round(iw * scale));
+    int nh = static_cast<int>(std::round(ih * scale));
+
+    cv::Mat resized; cv::resize(img, resized, cv::Size(nw, nh));
+    cv::Mat canvas(H, W, img.type(), padColor);
+    int padX = (W - nw) / 2;
+    int padY = (H - nh) / 2;
+    resized.copyTo(canvas(cv::Rect(padX, padY, nw, nh)));
+    if(outInfo){ outInfo->scale = scale; outInfo->padX = padX; outInfo->padY = padY; outInfo->outW=W; outInfo->outH=H; outInfo->inW=iw; outInfo->inH=ih; }
+
+    if (toRGB) {
+        cv::cvtColor(canvas, canvas, cv::COLOR_BGR2RGB);
+    }
+    if (scaleTo01) {
+        canvas.convertTo(canvas, CV_32FC3, 1.0/255.0);
+    } else {
+        canvas.convertTo(canvas, CV_32FC3);
+    }
+    if (mean && stdv) {
+        cv::Mat meanMat(canvas.size(), canvas.type(), *mean);
+        cv::Mat stdMat(canvas.size(), canvas.type(), *stdv);
+        cv::subtract(canvas, meanMat, canvas);
+        cv::divide(canvas, stdMat, canvas);
+    }
+    return canvas;
+}

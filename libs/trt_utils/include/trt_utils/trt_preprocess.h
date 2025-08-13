@@ -25,3 +25,27 @@ cv::Mat preprocessImageWithMeanStd(const cv::Mat& src, int W, int H,
                                    const cv::Scalar* mean, // nullptr to skip
                                    const cv::Scalar* stdv  // nullptr to skip
 );
+
+// Letterbox info describing scale and paddings applied.
+struct LetterboxInfo {
+    float scale{1.0f};
+    int padX{0};
+    int padY{0};
+    int outW{0};
+    int outH{0};
+    int inW{0};
+    int inH{0};
+};
+
+// YOLO-style letterbox preprocess with configurable mean/std and pad color.
+// - Keep aspect ratio, resize to fit within WxH, pad with padColor (default 114) to WxH.
+// - toRGB: convert BGR->RGB when true. scaleTo01: divide by 255 when true.
+// - mean/std: when provided (size 3), apply per-channel (img - mean) / std after optional scaling.
+// - outInfo: optional (when provided) gets filled with scale/pad and sizes for reverse mapping.
+cv::Mat preprocessLetterboxWithMeanStd(const cv::Mat& src, int W, int H,
+                                       bool toRGB,
+                                       bool scaleTo01,
+                                       const cv::Scalar* mean, // nullptr to skip
+                                       const cv::Scalar* stdv, // nullptr to skip
+                                       const cv::Scalar& padColor = cv::Scalar(114,114,114),
+                                       LetterboxInfo* outInfo = nullptr);

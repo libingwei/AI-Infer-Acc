@@ -8,6 +8,7 @@ add_library(trt_utils SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/src/trt_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/trt_preprocess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/int8_calibrator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/trt_vision.cpp
 )
 
 # For a shared library, ensure it has the necessary RPATH to find its own dependencies at runtime
@@ -75,6 +76,7 @@ install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/trt_utils/trt_builder.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/trt_utils/trt_runtime.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/trt_utils/trt_preprocess.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/trt_utils/trt_vision.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/trt_utils/int8_calibrator.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/trt_utils)
 

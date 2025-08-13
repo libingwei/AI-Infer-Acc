@@ -23,7 +23,7 @@ std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std
 
     config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1ULL<<30); // 1GB
 
-    std::unique_ptr<Int8Calibrator> calibrator;
+    std::unique_ptr<nvinfer1::IInt8Calibrator> calibHolder;
 
     if (opt.precision == "fp16") {
         config->setFlag(nvinfer1::BuilderFlag::kFP16);
@@ -43,15 +43,59 @@ std::unique_ptr<nvinfer1::IHostMemory> TrtEngineBuilder::buildFromOnnx(const std
         outInputH = (nb>=2) ? dims.d[nb-2] : 224;
         if (outInputW <= 0 || outInputH <= 0) { outInputW = 224; outInputH = 224; }
         outInputName = inName;
-        if (extCalibrator) {
+    if (extCalibrator) {
             config->setInt8Calibrator(extCalibrator);
         } else {
             if (!EngineIO::dirExists(calibDir)) {
                 std::cerr << "Calibration directory missing: " << calibDir << std::endl;
                 return nullptr;
             }
-            calibrator = std::make_unique<Int8Calibrator>(8, outInputW, outInputH, calibDir, opt.calibTable, inName);
-            config->setInt8Calibrator(calibrator.get());
+            std::string algo = "entropy"; if (const char* e = std::getenv("CALIB_ALGO")) algo = e;
+            for (auto& c : algo) c = static_cast<char>(::tolower(c));
+            if (algo == "minmax") {
+                std::cout << "Using MinMax calibrator" << std::endl;
+        calibHolder.reset(new Int8MinMaxCalibrator(8, outInputW, outInputH, calibDir, opt.calibTable, inName));
+        config->setInt8Calibrator(calibHolder.get());
+            } else {
+                std::cout << "Using Entropy calibrator" << std::endl;
+        calibHolder = std::make_unique<Int8Calibrator>(8, outInputW, outInputH, calibDir, opt.calibTable, inName);
+        config->setInt8Calibrator(calibHolder.get());
+            }
+        }
+
+        // Optional mixed-precision protections via env flags
+        bool protectFirst = false, protectLast = false, protectSoftmax = false;
+        if (const char* e = std::getenv("INT8_FP16_FIRST")) { std::string v=e; if (v=="1"||v=="true") protectFirst=true; }
+        if (const char* e = std::getenv("INT8_FP16_LAST")) { std::string v=e; if (v=="1"||v=="true") protectLast=true; }
+        if (const char* e = std::getenv("INT8_FP32_SOFTMAX")) { std::string v=e; if (v=="1"||v=="true") protectSoftmax=true; }
+
+        if (protectFirst || protectLast || protectSoftmax) {
+            config->setFlag(nvinfer1::BuilderFlag::kFP16); // allow FP16 when needed
+            config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED);
+            config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
+            // Apply per-layer constraints heuristically
+            int nbLayers = network->getNbLayers();
+            if (protectFirst && nbLayers > 0) {
+                auto* l0 = network->getLayer(0);
+                l0->setPrecision(nvinfer1::DataType::kHALF);
+                l0->setOutputType(0, nvinfer1::DataType::kHALF);
+            }
+            if (protectLast && nbLayers > 0) {
+                auto* ln = network->getLayer(nbLayers - 1);
+                ln->setPrecision(nvinfer1::DataType::kHALF);
+                int nOuts = ln->getNbOutputs();
+                for (int i=0;i<nOuts;++i) ln->setOutputType(i, nvinfer1::DataType::kHALF);
+            }
+            if (protectSoftmax) {
+                for (int i = 0; i < nbLayers; ++i) {
+                    auto* lyr = network->getLayer(i);
+                    if (lyr->getType() == nvinfer1::LayerType::kSOFTMAX) {
+                        lyr->setPrecision(nvinfer1::DataType::kFLOAT);
+                        int nOuts = lyr->getNbOutputs();
+                        for (int j=0;j<nOuts;++j) lyr->setOutputType(j, nvinfer1::DataType::kFLOAT);
+                    }
+                }
+            }
         }
     } else {
         std::cout << "Build FP32" << std::endl;

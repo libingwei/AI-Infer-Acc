@@ -244,14 +244,11 @@ Kaggle（calibration_data 前 200 张）实测：
 2) 运行准备脚本，解包并生成标签 CSV（会生成 `imagenet_classes.tsv`；默认不重组目录，保持扁平的 `val/*.JPEG` 结构）：
 
 ```bash
-python scripts/prepare_imagenet_val.py
+python scripts/prepare_imagenet_val.py --calib-count 2000 --eval-count 1000
 
 # 如需要按 WNID 重组为子目录，可添加：
 # python scripts/prepare_imagenet_val.py --reorg
 
-# 可选：先离线导出类别映射（建议）
-# 这会把 torchvision 自带的 imagenet_class_index.json 复制到 assets/ 下，供脚本优先使用
-python scripts/export_imagenet_class_index.py
 ```
 
 脚本会在项目根目录生成：
